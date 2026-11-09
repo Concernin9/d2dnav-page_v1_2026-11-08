@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D2D-Nav: Benchmarking Door-to-Door Navigation on Planned Routes</title>
+<meta name="description" content="D2D-Nav is a benchmark for door-to-door navigation on planned routes, with a connected indoor and outdoor world, unmapped and held-out obstacles, pre-registered exams, warehouse demonstrations, and real driving logs. DeRoute edits the route that a driving policy reads, without updating the policy, and passes 135 of 144 cases.">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#F7F5FC">
+<meta property="og:title" content="D2D-Nav: Benchmarking Door-to-Door Navigation on Planned Routes">
+<meta property="og:description" content="A connected indoor and outdoor world with planned routes, unmapped obstacles, and pre-registered exams. DeRoute passes 135 of 144 cases.">
+<meta property="og:image" content="static/images/og.jpg">
+<meta property="og:type" content="website">
+<link rel="icon" href="static/images/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="static/fonts/lora-roman.woff" as="font" type="font/woff" crossorigin>
+<link rel="stylesheet" href="static/css/site.css?v=1">
+</head>
+<body>
+<a class="skip" href="#abstract">Skip to the abstract</a>
+
+<header class="bar">
+  <div class="bar-in">
+    <a class="mark" href="#top">D2D-Nav</a>
+    <nav aria-label="Sections">
+      <a href="#benchmark">Benchmark</a>
+      <a href="#route-lock">Route lock</a>
+      <a href="#method">DeRoute</a>
+      <a href="#results">Results</a>
+      <a href="#real">Real logs</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="title">
+  <h1><span class="t-name">D2D-Nav</span><span class="t-sub">Benchmarking Door-to-Door Navigation on Planned Routes</span></h1>
+  <ul class="affil" aria-label="Affiliations">
+    <li>Tsinghua University</li>
+    <li>QUORRA</li>
+  </ul>
+  <div class="links">
+    <span class="btn is-soon" aria-disabled="true" title="Available upon acceptance">Paper</span>
+    <span class="btn is-soon" aria-disabled="true" title="Available upon acceptance">Supplementary</span>
+    <span class="btn is-soon" aria-disabled="true" title="Available upon acceptance">Code</span>
+    <span class="btn is-soon" aria-disabled="true" title="Available upon acceptance">Data</span>
+  </div>
+  <p class="release-note">Paper, code, model weights, and data will be released upon acceptance.</p>
+</section>
+
+<figure class="hero" id="hero">
+  <div class="hero-frame">
+    <canvas id="ink" aria-label="The D2D-Nav world drawn as ink characters, with the 144 planned routes of the final exam"></canvas>
+    <noscript><img src="static/images/hero_render.webp" alt="The D2D-Nav world, rendered"></noscript>
+  </div>
+  <div class="hero-legend" role="group" aria-label="Show routes by movement">
+    <button type="button" data-m="OO"><i class="sw sw-oo"></i>Outdoors <span class="n">72</span></button>
+    <button type="button" data-m="OI"><i class="sw sw-oi"></i>Entering a building <span class="n">36</span></button>
+    <button type="button" data-m="IO"><i class="sw sw-io"></i>Leaving a building <span class="n">36</span></button>
+    <span class="key"><i class="sw sw-ob"></i>Obstacle the map omits</span>
+  </div>
+  <figcaption>The D2D-Nav world in ink, with the 144 planned routes of the final exam. <span class="hint-fine">Point at the picture to see the render underneath.</span><span class="hint-touch">Drag across the picture to see the render underneath.</span></figcaption>
+</figure>
+
+<section class="prose" id="abstract">
+  <h2>Abstract</h2>
+  <p>Delivery and pick-up tasks run from door to door, through rooms, lobbies, sidewalks, and plazas. Indoor and outdoor navigation have been studied apart, and the benchmarks that now join them define door-to-door by where to go: the robot is given a goal and a camera and must find a path. We define it by how to get there. In service use the building map and the destination door are given and a planner plans the route. What remains is to drive it past what the map omits and through doors, with one policy on both sides.</p>
+  <p>D2D-Nav is built to this definition: a connected indoor and outdoor world with planned routes, unmapped and held-out obstacles, and pre-registered exams, together with warehouse demonstrations and real driving logs read with the same sensors. A world-model driving policy, imitation-trained once in a warehouse and frozen, follows the route but is <em>route-locked</em>: where the route crosses an unmapped obstacle it halts or collides, no residual on its actions passes such a case, and the same policy given a detour route does. A tracking view explains why: the policy's own feedback keeps action-space exploration near the route, whereas shifting the route shifts its equilibrium, provided the route passes through the robot.</p>
+  <p>DeRoute therefore edits the route: LiDAR returns binned in the route frame feed a small head that predicts a bounded lateral deviation, an ego-anchored executor hands the rectified route to the driving policy, and an evidence-gated prior keeps the deviation at zero where nothing blocks the route. The driving policy with DeRoute passes 135 of 144 pre-registered cases and 16 of 17 cases across obstacle categories withheld from training.</p>
+</section>
+
+<figure class="wide zoomable">
+  <img src="static/images/figures/teaser.webp" width="2400" height="471" alt="Overview: the door-to-door world, DeRoute, closed-loop results in simulation, and open-loop prediction on real logs" loading="lazy">
+  <figcaption><strong>Door-to-door navigation on planned routes.</strong> (1) One trip runs from a home, across a street and a plaza, into the hospital, past two obstacles absent from the map (red). (2) The driving policy is never updated, and DeRoute rectifies the route it reads. (3) In closed loop, DeRoute passes 135 of 144 final-exam cases. (4) On real logs, the base fine-tuned on real driving predicts the operator's turn rate from the same sensors. Select the figure to enlarge it.</figcaption>
+</figure>
+
+<div class="ink-rule" aria-hidden="true"></div>
+
+<section class="prose" id="benchmark">
+  <h2>The benchmark</h2>
+  <p>Navigation has two halves, where to go and how to get there. NavVerse and I2O2I-Nav define door-to-door by where to go and leave the driving to a follower that is not under test. D2D-Nav gives the planned route and the sensors a service robot carries, a LiDAR for where things are and six cameras for what they are, and tests the driving: doors as narrow as 1.8&nbsp;m, objects absent from the map, and categories withheld from training.</p>
+  <p>The world is a city block exported from Unreal Engine to Isaac Sim. An outdoor plaza with streets and sidewalks and three indoor scenes, a home, a hospital lobby, and an office lobby, are joined by doors. A planner computes natural routes on the static map, which omits the obstacles, so it neither knows nor avoids them.</p>
+  <dl class="facts">
+    <div><dt>World</dt><dd>216 &times; 136&nbsp;m, 6,986&nbsp;m&sup2; drivable</dd></div>
+    <div><dt>Doors</dt><dd>1.825, 3.125, and 3.725&nbsp;m wide</dd></div>
+    <div><dt>Obstacles</dt><dd>60 of 19 categories and 25 traffic cones</dd></div>
+    <div><dt>Withheld from training</dt><dd>Square bins, oak stools, iron benches, wheelchairs (15 objects)</dd></div>
+    <div><dt>Training routes</dt><dd>4,623, none crossing a withheld category</dd></div>
+    <div><dt>Final exam</dt><dd>144 cases from 5,018 candidates, rules registered before any method was scored</dd></div>
+    <div><dt>Validation exam</dt><dd>48 new cases drawn with the same rules, run once</dd></div>
+    <div><dt>Symmetric exam</dt><dd>48 cases, half passable only on the left, half only on the right</dd></div>
+    <div><dt>Warehouse demonstrations</dt><dd>189 episodes, 84,277 frames, one operator</dd></div>
+    <div><dt>Real driving logs</dt><dd>739 segments over 53 runs on seven days</dd></div>
+  </dl>
+</section>
+
+<section class="block" aria-labelledby="h-skies">
+  <h3 id="h-skies" class="block-title">Six display skies</h3>
+  <div class="skies" data-auto>
+    <div class="skies-stage">
+      <img src="static/images/world/sky_clear.webp" width="1200" height="675" alt="The world under a clear sky" class="on">
+      <img src="static/images/world/sky_dusk.webp" width="1200" height="675" alt="The world at dusk" loading="lazy">
+      <img src="static/images/world/sky_night.webp" width="1200" height="675" alt="The world at night" loading="lazy">
+      <img src="static/images/world/sky_overcast.webp" width="1200" height="675" alt="The world under an overcast sky" loading="lazy">
+      <img src="static/images/world/sky_fog.webp" width="1200" height="675" alt="The world in fog" loading="lazy">
+      <img src="static/images/world/sky_rain.webp" width="1200" height="675" alt="The world in rain" loading="lazy">
+    </div>
+    <div class="skies-pick" role="tablist" aria-label="Sky">
+      <button role="tab" aria-selected="true">Clear</button>
+      <button role="tab" aria-selected="false">Dusk</button>
+      <button role="tab" aria-selected="false">Night</button>
+      <button role="tab" aria-selected="false">Overcast</button>
+      <button role="tab" aria-selected="false">Fog</button>
+      <button role="tab" aria-selected="false">Rain</button>
+    </div>
+  </div>
+  <p class="cap">Renders are for display. Experiments use plain lighting.</p>
+</section>
+
+<section class="block" aria-labelledby="h-scenes">
+  <h3 id="h-scenes" class="block-title">Scenes along the routes</h3>
+  <div class="scenes">
+    <figure><img src="static/images/world/scene_home.webp" width="1000" height="563" alt="The home, kitchen and living room" loading="lazy"><figcaption>Home</figcaption></figure>
+    <figure><img src="static/images/world/scene_hospital.webp" width="1000" height="563" alt="The hospital lobby with a wheelchair" loading="lazy"><figcaption>Hospital lobby</figcaption></figure>
+    <figure><img src="static/images/world/scene_office.webp" width="1000" height="563" alt="The office lobby" loading="lazy"><figcaption>Office lobby</figcaption></figure>
+    <figure><img src="static/images/world/scene_home_door.webp" width="1000" height="563" alt="Looking out through the home door" loading="lazy"><figcaption>Home door, looking out</figcaption></figure>
+    <figure><img src="static/images/world/scene_plaza.webp" width="1000" height="563" alt="The plaza in front of the hospital" loading="lazy"><figcaption>Plaza</figcaption></figure>
+    <figure><img src="static/images/world/scene_sidewalk.webp" width="1000" height="563" alt="A sidewalk with a bin on the route" loading="lazy"><figcaption>Sidewalk</figcaption></figure>
+  </div>
+</section>
+
+<section class="block" aria-labelledby="h-objects">
+  <h3 id="h-objects" class="block-title">Nineteen obstacle categories, at true scale</h3>
+  <div class="lineup-wrap" tabindex="0" aria-label="Obstacle lineup, scroll sideways">
+    <div class="lineup">
+      <div class="lineup-row">
+        <p class="row-label">Plaza and sidewalks</p>
+        <figure class="obj obj-scale" aria-hidden="true"><span class="bar1m"></span><figcaption>1&nbsp;m</figcaption></figure>
+        <figure class="obj" style="--h:0.77;--a:0.8595"><img src="static/images/objects/obj_04.webp" alt="Clay urn, 0.77 m" loading="lazy" width="361" height="420"><figcaption>Clay urn<span class="h">0.77&nbsp;m, 10 placed</span></figcaption></figure>
+        <figure class="obj is-held" style="--h:1.01;--a:0.7405"><img src="static/images/objects/obj_03.webp" alt="Square bin, 1.01 m" loading="lazy" width="311" height="420"><figcaption>Square bin<span class="h">1.01&nbsp;m, 7 placed</span><span class="tag-held">Withheld</span></figcaption></figure>
+        <figure class="obj" style="--h:1.75;--a:0.8357"><img src="static/images/objects/obj_05.webp" alt="Large planter, 1.75 m" loading="lazy" width="351" height="420"><figcaption>Large planter<span class="h">1.75&nbsp;m, 6 placed</span></figcaption></figure>
+        <figure class="obj" style="--h:1.04;--a:0.6524"><img src="static/images/objects/obj_02.webp" alt="Round bin, 1.04 m" loading="lazy" width="274" height="420"><figcaption>Round bin<span class="h">1.04&nbsp;m, 8 placed</span></figcaption></figure>
+        <figure class="obj is-held" style="--h:0.99;--a:1.0381"><img src="static/images/objects/obj_00.webp" alt="Iron bench, 0.99 m" loading="lazy" width="436" height="420"><figcaption>Iron bench<span class="h">0.99&nbsp;m, 6 placed</span><span class="tag-held">Withheld</span></figcaption></figure>
+        <figure class="obj" style="--h:0.44;--a:4.0976"><img src="static/images/objects/obj_01.webp" alt="Stone bench, 0.44 m" loading="lazy" width="1721" height="420"><figcaption>Stone bench<span class="h">0.44&nbsp;m, 6 placed</span></figcaption></figure>
+        <figure class="obj" style="--h:0.46;--a:0.6548"><img src="static/images/objects/obj_19.webp" alt="Traffic cone, 0.46 m" loading="lazy" width="275" height="420"><figcaption>Traffic cone<span class="h">0.46&nbsp;m, 25 placed</span></figcaption></figure>
+      </div>
+      <div class="lineup-row">
+        <p class="row-label">Indoors</p>
+        <figure class="obj obj-scale" aria-hidden="true"><span class="bar1m"></span><figcaption>1&nbsp;m</figcaption></figure>
+        <figure class="obj" style="--h:0.72;--a:0.4190"><img src="static/images/objects/obj_18.webp" alt="Indoor bin, 0.72 m" loading="lazy" width="176" height="420"><figcaption>Indoor bin<span class="h">0.72&nbsp;m, 2 placed</span></figcaption></figure>
+        <figure class="obj is-held" style="--h:0.84;--a:0.6690"><img src="static/images/objects/obj_17.webp" alt="Oak stool, 0.84 m" loading="lazy" width="281" height="420"><figcaption>Oak stool<span class="h">0.84&nbsp;m</span><span class="tag-held">Withheld</span></figcaption></figure>
+        <figure class="obj" style="--h:0.95;--a:0.8452"><img src="static/images/objects/obj_07.webp" alt="Small planter, 0.95 m" loading="lazy" width="355" height="420"><figcaption>Small planter<span class="h">0.95&nbsp;m, 3 placed</span></figcaption></figure>
+        <figure class="obj" style="--h:1.02;--a:0.8381"><img src="static/images/objects/obj_11.webp" alt="Visitor chair, 1.02 m" loading="lazy" width="352" height="420"><figcaption>Visitor chair<span class="h">1.02&nbsp;m</span></figcaption></figure>
+        <figure class="obj" style="--h:1.07;--a:0.5643"><img src="static/images/objects/obj_12.webp" alt="Task chair, 1.07 m" loading="lazy" width="237" height="420"><figcaption>Task chair<span class="h">1.07&nbsp;m</span></figcaption></figure>
+        <figure class="obj is-held" style="--h:1.16;--a:0.8643"><img src="static/images/objects/obj_09.webp" alt="Wheelchair, 1.16 m" loading="lazy" width="363" height="420"><figcaption>Wheelchair<span class="h">1.16&nbsp;m</span><span class="tag-held">Withheld</span></figcaption></figure>
+        <figure class="obj" style="--h:1.55;--a:0.5833"><img src="static/images/objects/obj_06.webp" alt="Medium planter, 1.55 m" loading="lazy" width="245" height="420"><figcaption>Medium planter<span class="h">1.55&nbsp;m, 2 placed</span></figcaption></figure>
+        <figure class="obj" style="--h:1.18;--a:0.5667"><img src="static/images/objects/obj_15.webp" alt="Swivel chair, 1.18 m" loading="lazy" width="238" height="420"><figcaption>Swivel chair<span class="h">1.18&nbsp;m</span></figcaption></figure>
+        <figure class="obj" style="--h:1.09;--a:1.4548"><img src="static/images/objects/obj_08.webp" alt="Waiting bench, 1.09 m" loading="lazy" width="611" height="420"><figcaption>Waiting bench<span class="h">1.09&nbsp;m</span></figcaption></figure>
+        <figure class="obj" style="--h:1.02;--a:0.8381"><img src="static/images/objects/obj_10.webp" alt="Teal chair, 1.02 m" loading="lazy" width="352" height="420"><figcaption>Teal chair<span class="h">1.02&nbsp;m</span></figcaption></figure>
+        <figure class="obj" style="--h:1.02;--a:0.8167"><img src="static/images/objects/obj_13.webp" alt="Armchair, 1.02 m" loading="lazy" width="343" height="420"><figcaption>Armchair<span class="h">1.02&nbsp;m</span></figcaption></figure>
+        <figure class="obj" style="--h:0.88;--a:0.7286"><img src="static/images/objects/obj_14.webp" alt="Cantilever chair, 0.88 m" loading="lazy" width="306" height="420"><figcaption>Cantilever chair<span class="h">0.88&nbsp;m</span></figcaption></figure>
+        <figure class="obj" style="--h:0.79;--a:1.1952"><img src="static/images/objects/obj_16.webp" alt="Club chair, 0.79 m" loading="lazy" width="502" height="420"><figcaption>Club chair<span class="h">0.79&nbsp;m</span></figcaption></figure>
+      </div>
+    </div>
+  </div>
+  <p class="cap">Heights are to scale, with traffic cones alongside. <span class="tag-held">Withheld</span> marks the four categories no training route crosses.</p>
+</section>
+
+<section class="block" aria-labelledby="h-sense">
+  <h3 id="h-sense" class="block-title">What the robot senses at a door</h3>
+  <div class="sense">
+    <figure><img src="static/images/sensors/cam_front_left.webp" width="640" height="400" alt="Front left camera" loading="lazy"><figcaption>Front left</figcaption></figure>
+    <figure><img src="static/images/sensors/cam_front.webp" width="640" height="400" alt="Front camera" loading="lazy"><figcaption>Front</figcaption></figure>
+    <figure><img src="static/images/sensors/cam_front_right.webp" width="640" height="400" alt="Front right camera" loading="lazy"><figcaption>Front right</figcaption></figure>
+    <figure class="s-lidar"><img src="static/images/sensors/lidar.webp" width="360" height="360" alt="LiDAR returns from above" loading="lazy"><figcaption>LiDAR from above</figcaption></figure>
+    <figure><img src="static/images/sensors/cam_rear_left.webp" width="640" height="400" alt="Rear left camera" loading="lazy"><figcaption>Rear left</figcaption></figure>
+    <figure><img src="static/images/sensors/cam_rear.webp" width="640" height="400" alt="Rear camera" loading="lazy"><figcaption>Rear</figcaption></figure>
+    <figure><img src="static/images/sensors/cam_rear_right.webp" width="640" height="400" alt="Rear right camera" loading="lazy"><figcaption>Rear right</figcaption></figure>
+    <figure class="s-depth"><img src="static/images/sensors/depth.webp" width="512" height="320" alt="Depth of the rear left camera" loading="lazy"><figcaption>Depth</figcaption></figure>
+    <figure class="s-seg"><img src="static/images/sensors/seg.webp" width="512" height="320" alt="Segmentation of the rear left camera" loading="lazy"><figcaption>Segmentation</figcaption></figure>
+    <p class="s-cap">Leaving the home through its door: the front cameras see the plaza while the rear cameras still see the room. Depth and segmentation are shown for the rear left camera.</p>
+  </div>
+</section>
+
+<section class="block" aria-labelledby="h-wh">
+  <h3 id="h-wh" class="block-title">Warehouse demonstrations</h3>
+  <video class="strip" muted loop playsinline preload="none" poster="static/videos/warehouse_demo.jpg" data-play width="1440" height="300">
+    <source src="static/videos/warehouse_demo.mp4" type="video/mp4">
+  </video>
+  <p class="cap">The base policy is imitation-trained once, on 189 episodes driven by one operator in a warehouse with the same six cameras and LiDAR. Shown at real speed: the six cameras above their segmentation.</p>
+</section>
+
+<div class="ink-rule" aria-hidden="true"></div>
+
+<section class="prose" id="route-lock">
+  <h2>Route-locked</h2>
+  <p>The driving policy follows the route it reads. Where the planned route crosses an object the map omits, it halts or collides. A residual on its actions, trained with the recipe of COMPASS, restores route following in the new world but passes none of these cases, and the same policy given a detour route passes.</p>
+  <p>A tracking view explains why. The policy's own feedback pulls any change in its actions back toward the route, so exploration in action space stays near the route. Shifting the route shifts the point the policy tracks, provided the route passes through the robot.</p>
+</section>
+
+<figure class="wide lock" aria-label="Animated comparison of correcting the action and editing the route">
+  <div class="lock-panels">
+    <div class="lock-panel">
+      <p class="lock-h">Correct the action</p>
+      <svg viewBox="0 0 560 200" role="img" aria-label="A robot whose actions are corrected stays near the planned route and halts at the obstacle">
+        <rect class="walk" x="10" y="40" width="540" height="120" rx="6"/>
+        <line class="planned" x1="30" y1="100" x2="530" y2="100"/>
+        <g class="trace-group"></g>
+        <rect class="obstacle" x="282" y="80" width="40" height="40" rx="6"/>
+        <path class="door" d="M538 40 V78 M538 122 V160"/>
+        <g class="robot"><circle r="9"/><line x1="0" y1="0" x2="13" y2="0"/></g>
+        <text class="lock-note" x="276" y="66" text-anchor="end">halts</text>
+      </svg>
+    </div>
+    <div class="lock-panel">
+      <p class="lock-h">Edit the route</p>
+      <svg viewBox="0 0 560 200" role="img" aria-label="With the route edited around the obstacle, the same policy passes and reaches the door">
+        <rect class="walk" x="10" y="40" width="540" height="120" rx="6"/>
+        <line class="planned" x1="30" y1="100" x2="530" y2="100"/>
+        <path class="rectified" d="M30 100 H200 C240 100 240 60 280 60 H324 C364 60 364 100 404 100 H530"/>
+        <rect class="obstacle" x="282" y="80" width="40" height="40" rx="6"/>
+        <path class="door" d="M538 40 V78 M538 122 V160"/>
+        <g class="robot"><circle r="9"/><line x1="0" y1="0" x2="13" y2="0"/></g>
+        <text class="lock-note ok" x="520" y="130" text-anchor="end">passes</text>
+      </svg>
+    </div>
+  </div>
+  <div class="lock-key">
+    <span><i class="k-planned"></i>Planned route</span>
+    <span><i class="k-rect"></i>Rectified route</span>
+    <span><i class="k-ob"></i>Object the map omits</span>
+  </div>
+</figure>
+
+<figure class="wide pair" aria-labelledby="pair-cap">
+  <div class="pair-grid">
+    <div class="pair-side">
+      <p class="pair-h"><i class="trail trail-res"></i>COMPASS residual</p>
+      <img src="gallery/case09_c.webp" width="960" height="540" alt="The COMPASS residual stops in front of a square bin" loading="lazy">
+    </div>
+    <div class="pair-side">
+      <p class="pair-h"><i class="trail trail-ours"></i>DeRoute</p>
+      <div class="flip" data-flip>
+        <img src="gallery/case09_a.webp" width="960" height="540" alt="DeRoute approaching the square bin" loading="lazy" class="on">
+        <img src="gallery/case09_b.webp" width="960" height="540" alt="DeRoute passing the square bin" loading="lazy">
+      </div>
+    </div>
+  </div>
+  <figcaption id="pair-cap">A square bin, a category withheld from training, on a 61.8&nbsp;m sidewalk route. The same driving policy stops in front of it with the action residual and passes it when DeRoute edits the route.</figcaption>
+</figure>
+
+<div class="ink-rule" aria-hidden="true"></div>
+
+<section class="prose" id="method">
+  <h2>DeRoute</h2>
+  <p>DeRoute edits the route, not the action. LiDAR returns binned in the frame of the planned route feed a deviation head of 27.5k parameters, the only trained part. Its bounded output sets a lateral deviation, which an ego-anchored executor turns into the rectified route that the driving policy reads. An evidence-gated prior keeps the deviation at zero where nothing blocks the route, so the policy keeps to unobstructed routes and through doors.</p>
+  <p>The driving policy itself, a world model over six cameras and LiDAR imitation-trained in the warehouse, is never updated.</p>
+</section>
+
+<figure class="wide zoomable">
+  <img src="static/images/figures/framework.webp" width="2400" height="990" alt="DeRoute on a door-to-door task: the route, the driving policy, and the Route Rectifier" loading="lazy">
+  <figcaption><strong>DeRoute on a door-to-door task.</strong> Top: a route planned on the static map leaves a home, crosses a street, passes through a convenience store, and enters a hospital lobby, each through its door. Middle: the driving policy turns the world-model state of its six cameras and LiDAR, and the route, into an action that a frozen action residual corrects. Bottom: the Route Rectifier edits the route, not the action.</figcaption>
+</figure>
+
+<div class="ink-rule" aria-hidden="true"></div>
+
+<section class="prose" id="results">
+  <h2>Results</h2>
+  <p>All methods run the same exams with the same judge. A case passes if the robot ends within 0.5&nbsp;m of the goal within 60&nbsp;s, without contact and inside the drivable area. DeRoute passed 135 cases in each of three final-exam runs, and we do not rank differences of fewer than four cases.</p>
+</section>
+
+<figure class="wide bars-fig" aria-labelledby="bars-cap">
+  <div class="bars" role="table" aria-label="Passed cases by method">
+    <div class="bars-row bars-head" role="row">
+      <span role="columnheader">Method</span>
+      <span role="columnheader">Final exam, of 144</span>
+      <span role="columnheader" class="num">Withheld, of 17</span>
+      <span role="columnheader" class="num">Validation, of 48</span>
+    </div>
+    <div class="bars-row is-ours" role="row" style="--v:135">
+      <span role="cell">DeRoute (ours)</span>
+      <span role="cell" class="meter"><b></b><em>135</em></span>
+      <span role="cell" class="num">16</span>
+      <span role="cell" class="num">45</span>
+    </div>
+    <div class="bars-row" role="row" style="--v:95">
+      <span role="cell">ViPlanner</span>
+      <span role="cell" class="meter"><b></b><em>95</em></span>
+      <span role="cell" class="num">13</span>
+      <span role="cell" class="num">35</span>
+    </div>
+    <div class="bars-row" role="row" style="--v:82">
+      <span role="cell">NavDP</span>
+      <span role="cell" class="meter"><b></b><em>82</em></span>
+      <span role="cell" class="num">7</span>
+      <span role="cell" class="num">35</span>
+    </div>
+    <div class="bars-row" role="row" style="--v:81">
+      <span role="cell">COMPASS residual</span>
+      <span role="cell" class="meter"><b></b><em>81</em></span>
+      <span role="cell" class="num">0</span>
+      <span role="cell" class="num">31</span>
+    </div>
+    <div class="bars-row" role="row" style="--v:44">
+      <span role="cell">Our base policy</span>
+      <span role="cell" class="meter"><b></b><em>44</em></span>
+      <span role="cell" class="num">0</span>
+      <span role="cell" class="num">18</span>
+    </div>
+    <div class="bars-row" role="row" style="--v:29">
+      <span role="cell">X-Mobility</span>
+      <span role="cell" class="meter"><b></b><em>29</em></span>
+      <span role="cell" class="num">5</span>
+      <span role="cell" class="num">16</span>
+    </div>
+  </div>
+  <figcaption id="bars-cap">Passed cases. ViPlanner, NavDP, and X-Mobility run with released weights. The COMPASS residual and DeRoute adapt our base policy on D2D-Nav. Withheld: final-exam cases whose route crosses a category no training route crosses.</figcaption>
+</figure>
+
+<section class="block" aria-labelledby="h-only">
+  <h3 id="h-only" class="block-title">Eighteen cases only DeRoute passes</h3>
+  <p class="lede">Among the six methods, DeRoute alone passes these cases: 13 from the final exam, 3 from the validation exam, and 2 from P2P-32. Each card plays DeRoute approaching and passing. Switch to the COMPASS residual to see where it ends.</p>
+  <div class="cases" id="cases">
+    <article class="case">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case09_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case09_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case09_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 61.8&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a square bin. Square bins are withheld from training.</p>
+      <p class="case-out">DeRoute arrives in 36.4&nbsp;s, in 3 of 3 runs. The COMPASS residual stops short of the goal.</p>
+    </article>
+    <article class="case">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case06_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case06_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case06_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 42.1&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: an iron bench. Iron benches are withheld from training.</p>
+      <p class="case-out">DeRoute arrives in 27.3&nbsp;s, in 3 of 3 runs. The COMPASS residual collides after 12.1&nbsp;s.</p>
+    </article>
+    <article class="case">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case17_a.webp" width="960" height="540" alt="DeRoute approaching, entering a building" loading="lazy">
+        <img class="fb" src="gallery/case17_b.webp" width="960" height="540" alt="DeRoute passing, entering a building" loading="lazy">
+        <img class="fc" src="gallery/case17_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, entering a building" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Entering a building, 36.0&nbsp;m route <span class="case-exam">P2P-32</span></p>
+      <p class="case-what">On the route: an oak stool and a traffic cone. Oak stools are withheld from training.</p>
+      <p class="case-out">DeRoute arrives in 22.3&nbsp;s, in 3 of 3 windows. The COMPASS residual collides after 20.9&nbsp;s.</p>
+    </article>
+    <article class="case">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case01_a.webp" width="960" height="540" alt="DeRoute approaching, leaving a building" loading="lazy">
+        <img class="fb" src="gallery/case01_b.webp" width="960" height="540" alt="DeRoute passing, leaving a building" loading="lazy">
+        <img class="fc" src="gallery/case01_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, leaving a building" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Leaving a building, 39.9&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a round bin.</p>
+      <p class="case-out">DeRoute arrives in 24.3&nbsp;s, in 3 of 3 runs. The COMPASS residual stops short of the goal.</p>
+    </article>
+    <article class="case">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case05_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case05_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case05_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 52.8&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a large planter.</p>
+      <p class="case-out">DeRoute arrives in 30.4&nbsp;s, in 3 of 3 runs. The COMPASS residual collides after 8.9&nbsp;s.</p>
+    </article>
+    <article class="case">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case18_a.webp" width="960" height="540" alt="DeRoute approaching, entering a building" loading="lazy">
+        <img class="fb" src="gallery/case18_b.webp" width="960" height="540" alt="DeRoute passing, entering a building" loading="lazy">
+        <img class="fc" src="gallery/case18_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, entering a building" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Entering a building, 23.8&nbsp;m route <span class="case-exam">P2P-32</span></p>
+      <p class="case-what">On the route: a stone bench.</p>
+      <p class="case-out">DeRoute arrives in 18.4&nbsp;s, in 3 of 3 windows. The COMPASS residual collides after 5.0&nbsp;s.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case02_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case02_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case02_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 65.3&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a traffic cone.</p>
+      <p class="case-out">DeRoute arrives in 40.1&nbsp;s, in 3 of 3 runs. The COMPASS residual stops short of the goal.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case03_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case03_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case03_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 45.1&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a large planter.</p>
+      <p class="case-out">DeRoute arrives in 27.4&nbsp;s, in 1 of 3 runs. The COMPASS residual stops short of the goal.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case04_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case04_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case04_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 38.9&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a large planter.</p>
+      <p class="case-out">DeRoute arrives in 24.3&nbsp;s, in 3 of 3 runs. The COMPASS residual stops short of the goal.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case07_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case07_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case07_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 62.8&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a square bin. Square bins are withheld from training.</p>
+      <p class="case-out">DeRoute arrives in 36.1&nbsp;s, in 3 of 3 runs. The COMPASS residual collides after 38.7&nbsp;s.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case08_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case08_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case08_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 45.5&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a round bin.</p>
+      <p class="case-out">DeRoute arrives in 26.5&nbsp;s, in 3 of 3 runs. The COMPASS residual stops short of the goal.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case10_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case10_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case10_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 48.8&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a clay urn.</p>
+      <p class="case-out">DeRoute arrives in 38.3&nbsp;s, in 3 of 3 runs. The COMPASS residual collides after 6.8&nbsp;s.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case11_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case11_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case11_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 44.6&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a clay urn.</p>
+      <p class="case-out">DeRoute arrives in 24.9&nbsp;s, in 3 of 3 runs. The COMPASS residual stops short of the goal.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case12_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case12_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case12_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 60.3&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a clay urn.</p>
+      <p class="case-out">DeRoute arrives in 43.1&nbsp;s, in 3 of 3 runs. The COMPASS residual stops short of the goal.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case13_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case13_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case13_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 22.9&nbsp;m route <span class="case-exam">Final exam</span></p>
+      <p class="case-what">On the route: a round bin.</p>
+      <p class="case-out">DeRoute arrives in 12.8&nbsp;s, in 3 of 3 runs. The COMPASS residual stops short of the goal.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case14_a.webp" width="960" height="540" alt="DeRoute approaching, entering a building" loading="lazy">
+        <img class="fb" src="gallery/case14_b.webp" width="960" height="540" alt="DeRoute passing, entering a building" loading="lazy">
+        <img class="fc" src="gallery/case14_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, entering a building" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Entering a building, 41.3&nbsp;m route <span class="case-exam">Validation exam</span></p>
+      <p class="case-what">Nothing on the route but a door to pass through.</p>
+      <p class="case-out">DeRoute arrives in 26.8&nbsp;s, in its single run. The COMPASS residual stops short of the goal.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case15_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case15_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case15_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 55.0&nbsp;m route <span class="case-exam">Validation exam</span></p>
+      <p class="case-what">On the route: a clay urn.</p>
+      <p class="case-out">DeRoute arrives in 32.7&nbsp;s, in its single run. The COMPASS residual stops short of the goal.</p>
+    </article>
+    <article class="case is-extra">
+      <div class="case-media" data-mode="ours">
+        <img class="fa on" src="gallery/case16_a.webp" width="960" height="540" alt="DeRoute approaching, outdoors" loading="lazy">
+        <img class="fb" src="gallery/case16_b.webp" width="960" height="540" alt="DeRoute passing, outdoors" loading="lazy">
+        <img class="fc" src="gallery/case16_c.webp" width="960" height="540" alt="Where the COMPASS residual ends, outdoors" loading="lazy">
+      </div>
+      <div class="case-switch" role="group" aria-label="Method">
+        <button type="button" data-mode="ours" aria-pressed="true"><i class="trail trail-ours"></i>DeRoute</button>
+        <button type="button" data-mode="res" aria-pressed="false"><i class="trail trail-res"></i>COMPASS residual</button>
+      </div>
+      <p class="case-where">Outdoors, 44.0&nbsp;m route <span class="case-exam">Validation exam</span></p>
+      <p class="case-what">On the route: a clay urn.</p>
+      <p class="case-out">DeRoute arrives in 39.1&nbsp;s, in its single run. The COMPASS residual stops short of the goal.</p>
+    </article>
+  </div>
+  <button type="button" class="more" id="more-cases" aria-controls="cases" aria-expanded="false">Show all 18 cases</button>
+  <p class="cap">Re-rendered from the recorded poses under a display sky. Trails: <i class="trail trail-ours"></i>DeRoute, <i class="trail trail-res"></i>COMPASS residual.</p>
+</section>
+
+<div class="ink-rule" aria-hidden="true"></div>
+
+<section class="prose" id="real">
+  <h2>Real driving logs</h2>
+  <p>GhostClip logs a slow ground robot with the sensor layout of our base, six cameras and a 31-beam LiDAR. Each frame gives a method its sensors, its speed, and the next 20&nbsp;m of the driven path as the route, and is read open loop against the motion over the next 0.5&nbsp;s.</p>
+  <p>Fine-tuned on the training logs, the base predicts the turn rate better than repeating the last motion, 0.021 against 0.030&nbsp;rad/s, and on turns 0.040 against 0.057, from 0.204 with simulation alone.</p>
+</section>
+
+<figure class="wide">
+  <video class="framed" muted loop playsinline preload="none" poster="static/videos/real_log_turn.jpg" data-play width="1400" height="660">
+    <source src="static/videos/real_log_turn.mp4" type="video/mp4">
+  </video>
+  <figcaption>A turn from the test split: six cameras, LiDAR from above with the next 20&nbsp;m of the route, and the speed and turn rate of the operator.</figcaption>
+</figure>
+
+<figure class="wide zoomable">
+  <img src="static/images/figures/realworld.webp" width="2400" height="1120" alt="Nine scenes of the real-log test split" loading="lazy">
+  <figcaption><strong>Nine scenes of the test split.</strong> Each card: six cameras at frame <i>t</i>, LiDAR from above with the next 20&nbsp;m of the route, the front camera 1&nbsp;s before and after, and the labels with the turn rate predicted by the fine-tuned base.</figcaption>
+</figure>
+
+<figure class="wide indoor">
+  <div class="indoor-grid">
+    <video muted loop playsinline preload="none" poster="static/videos/real_store.jpg" data-play width="900" height="404"><source src="static/videos/real_store.mp4" type="video/mp4"></video>
+    <video muted loop playsinline preload="none" poster="static/videos/real_lobby_night.jpg" data-play width="900" height="404"><source src="static/videos/real_lobby_night.mp4" type="video/mp4"></video>
+  </div>
+  <figcaption>Real logs indoors, front camera: an aisle of a convenience store, and entering a lobby at night. Played at twice real speed.</figcaption>
+</figure>
+
+<div class="ink-rule" aria-hidden="true"></div>
+
+<section class="prose" id="release">
+  <h2>Release</h2>
+  <p>The world, routes, exams, code, and model weights will be released upon acceptance, together with the paper and its supplementary material.</p>
+</section>
+
+</main>
+
+<footer class="foot">
+  <p class="foot-affil">Tsinghua University <span aria-hidden="true">&ensp;/&ensp;</span> QUORRA</p>
+  <p>Renders on this page are for display. Experiments use plain lighting.</p>
+</footer>
+
+<dialog id="zoom" aria-label="Enlarged figure">
+  <form method="dialog"><button class="zoom-close" aria-label="Close">Close</button></form>
+  <div class="zoom-body"><img alt=""></div>
+</dialog>
+
+<script src="static/data/hero.js?v=1" defer></script>
+<script src="static/js/site.js?v=1" defer></script>
+</body>
+</html>
